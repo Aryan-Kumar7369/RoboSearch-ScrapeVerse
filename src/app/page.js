@@ -15,8 +15,8 @@ export default function Home() {
   const [selectedIds, setSelectedIds] = useState(['esp32-nodemcu', 'mg996r-servo']);
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [syncStatusText, setSyncStatusText] = useState('');
+  const [searchQuery, setSearchQuery] = useState('esp32');
+  const [statusText, setStatusText] = useState('');
 
   const toggleSelect = (id) => {
     setSelectedIds(prev =>
@@ -24,51 +24,55 @@ export default function Home() {
     );
   };
 
-  const handleSyncScrapers = async () => {
+  const handleSync = async () => {
+    if (!searchQuery.trim()) return;
+
     setIsSyncing(true);
-    setSyncStatusText('Dispatching collector...');
+    setStatusText(`Dispatching collector for "${searchQuery}"...`);
+
     try {
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          queryList: [
-            { keyword: searchQuery || "ESP32", site: "robu" },
-            { keyword: searchQuery || "ESP32", site: "flyrobo" },
-            { keyword: searchQuery || "ESP32", site: "electronicscomp" },
-            { keyword: searchQuery || "ESP32", site: "amazon" }
-          ]
+          keyword: searchQuery.trim()
         })
       });
+
       const data = await res.json();
 
       if (data.responseId) {
-        setIsTerminalOpen(true);
-        pollScraperResults(data.responseId);
+        startPolling(data.responseId);
+      } else {
+        setIsSyncing(false);
+        setStatusText('Failed to start collector');
       }
     } catch (err) {
       console.error(err);
       setIsSyncing(false);
+      setStatusText('Network Error');
     }
   };
 
-  const pollScraperResults = (responseId) => {
-    setSyncStatusText('Extracting live DOM prices...');
+  const startPolling = (responseId) => {
+    let timer = 0;
     const interval = setInterval(async () => {
+      timer += 3;
+      setStatusText(`Scraping in progress (${timer}s)...`);
+
       try {
-        const res = await fetch(`/api/scrape/results?responseId=${responseId}`);
+        const res = await fetch(`/api/scrape/results?responseId=${responseId}&_t=${Date.now()}`);
         const result = await res.json();
 
-        if (result.status === "READY" && result.data.length > 0) {
+        if (result.status === "READY" && result.data && result.data.length > 0) {
           clearInterval(interval);
           setComponents(prev => mergeScrapedResults(prev, result.data));
           setIsSyncing(false);
-          setSyncStatusText('Synced!');
-          setTimeout(() => setSyncStatusText(''), 3000);
+          setStatusText('Sync Complete!');
+          setTimeout(() => setStatusText(''), 4000);
         }
-      } catch (e) {
-        clearInterval(interval);
-        setIsSyncing(false);
+      } catch (err) {
+        console.error('Polling error:', err);
       }
     }, 3000);
   };
@@ -100,12 +104,12 @@ export default function Home() {
               />
             </div>
             <button
-              onClick={handleSyncScrapers}
+              onClick={handleSync}
               disabled={isSyncing}
               className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-cyan-950/60 border border-cyan-800/80 hover:bg-cyan-900/50 text-cyan-300 text-xs font-mono transition-all shadow-glow-cyan"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              {isSyncing ? (syncStatusText || 'Syncing...') : 'Sync Live Data'}
+              {isSyncing ? (statusText || 'Syncing...') : 'Sync Live Data'}
             </button>
           </div>
         </div>

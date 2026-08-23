@@ -7,29 +7,30 @@ export async function POST(req) {
 
     if (!apiKey || !collectorId) {
       return NextResponse.json(
-        { error: "Missing Bright Data environment variables." },
+        { error: "Missing API credentials in .env.local" },
         { status: 500 }
       );
     }
 
-    const { queryList } = await req.json();
-    
-    // Default search matrix across distributors if no query list is provided
-    const payload = queryList || [
-      { keyword: "ESP32 CP2102", site: "robu" },
-      { keyword: "ESP32 CP2102", site: "flyrobo" },
-      { keyword: "ESP32 CP2102", site: "electronicscomp" },
-      { keyword: "ESP32 CP2102", site: "amazon" },
-      { keyword: "MG996R Servo", site: "robu" },
-      { keyword: "MG996R Servo", site: "flyrobo" },
-      { keyword: "MG996R Servo", site: "electronicscomp" },
-      { keyword: "MG996R Servo", site: "amazon" },
-      { keyword: "Raspberry Pi 4 4GB", site: "robu" },
-      { keyword: "Raspberry Pi 4 4GB", site: "flyrobo" },
-      { keyword: "Raspberry Pi 4 4GB", site: "amazon" }
+    let body = {};
+    try {
+      body = await req.json();
+    } catch (e) {
+      body = {};
+    }
+
+    // Capture the search keyword from frontend (defaulting to ESP32 only if empty)
+    const targetQuery = body.keyword || (body.queryList && body.queryList[0]?.keyword) || "ESP32";
+
+    const payload = [
+      { keyword: targetQuery, site: "robu" },
+      { keyword: targetQuery, site: "flyrobo" },
+      { keyword: targetQuery, site: "electronicscomp" },
+      { keyword: targetQuery, site: "amazon" }
     ];
 
-    // Trigger collector run via Bright Data API
+    console.log(`[Triggering Scraper] Query: "${targetQuery}" on Collector: ${collectorId}`);
+
     const triggerRes = await fetch(
       `https://api.brightdata.com/dca/trigger?collector=${collectorId}&queue_next=1`,
       {
@@ -43,14 +44,26 @@ export async function POST(req) {
     );
 
     const triggerData = await triggerRes.json();
+    console.log("[BrightData Trigger Response]:", triggerData);
+
+    const responseId = triggerData.collection_id || triggerData.response_id || triggerData.id;
+
+    if (!responseId) {
+      return NextResponse.json(
+        { error: "Bright Data rejected trigger", details: triggerData },
+        { status: 502 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
-      responseId: triggerData.response_id,
+      responseId,
       status: "TRIGGERED",
       timestamp: new Date().toISOString()
     });
+
   } catch (error) {
+    console.error("[Scrape Trigger Error]:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
