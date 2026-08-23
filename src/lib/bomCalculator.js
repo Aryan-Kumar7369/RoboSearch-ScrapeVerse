@@ -1,76 +1,39 @@
-export function calculateBOMOptimization(selectedIds, allComponents) {
-  const selectedItems = allComponents.filter(c => selectedIds.includes(c.id));
-  if (selectedItems.length === 0) return null;
+export function mergeScrapedResults(existingComponents, scrapedRecords) {
+  if (!scrapedRecords || scrapedRecords.length === 0) return existingComponents;
 
-  // 1. Split Strategy: Cheapest in-stock vendor per item
-  let splitItemsCost = 0;
-  const splitVendorsUsed = new Set();
-  const splitBreakdown = [];
-
-  selectedItems.forEach(item => {
-    const available = item.vendors.filter(v => v.in_stock);
-    if (available.length > 0) {
-      const best = available.reduce((prev, curr) => curr.price < prev.price ? curr : prev);
-      splitItemsCost += best.price;
-      splitVendorsUsed.add(best.name);
-      splitBreakdown.push({ itemId: item.id, itemName: item.name, vendor: best });
-    }
-  });
-
-  // Calculate unique shipping fees for split orders
-  let splitShippingCost = 0;
-  splitVendorsUsed.forEach(vName => {
-    const vendorInfo = selectedItems.flatMap(i => i.vendors).find(v => v.name === vName);
-    splitShippingCost += vendorInfo ? vendorInfo.shipping_fee : 0;
-  });
-
-  const totalSplitCost = splitItemsCost + splitShippingCost;
-
-  // 2. Consolidated Strategy: Vendors with all items in stock
-  const allVendorNames = ["Robu.in", "Flyrobo", "ElectronicsComp", "Amazon India"];
-  const consolidatedOptions = [];
-
-  allVendorNames.forEach(vName => {
-    let hasAll = true;
-    let itemsTotal = 0;
-    let shippingFee = 0;
-
-    for (const item of selectedItems) {
-      const vData = item.vendors.find(v => v.name === vName);
-      if (!vData || !vData.in_stock) {
-        hasAll = false;
-        break;
-      }
-      itemsTotal += vData.price;
-      shippingFee = vData.shipping_fee; // Single shipping fee
-    }
-
-    if (hasAll) {
-      consolidatedOptions.push({
-        vendorName: vName,
-        totalCost: itemsTotal + shippingFee,
-        itemsTotal,
-        shippingFee
-      });
-    }
-  });
-
-  const bestConsolidated = consolidatedOptions.length > 0
-    ? consolidatedOptions.reduce((prev, curr) => curr.totalCost < prev.totalCost ? curr : prev)
-    : null;
-
-  const savings = bestConsolidated ? Math.max(0, bestConsolidated.totalCost - totalSplitCost) : 0;
-
-  return {
-    split: {
-      total: totalSplitCost,
-      itemsCost: splitItemsCost,
-      shipping: splitShippingCost,
-      breakdown: splitBreakdown,
-      uniqueVendorsCount: splitVendorsUsed.size
-    },
-    consolidated: bestConsolidated,
-    savings,
-    hasCompleteConsolidatedOption: !!bestConsolidated
+  const vendorNameMap = {
+    "robu": "Robu.in",
+    "flyrobo": "Flyrobo",
+    "electronicscomp": "ElectronicsComp",
+    "amazon": "Amazon India"
   };
+
+  return existingComponents.map(component => {
+    // Find records that match this product
+    const matchingRecords = scrapedRecords.filter(rec => 
+      rec.keyword && (
+        component.id.includes(rec.keyword.toLowerCase()) ||
+        component.name.toLowerCase().includes(rec.keyword.toLowerCase())
+      )
+    );
+
+    if (matchingRecords.length === 0) return component;
+
+    const updatedVendors = component.vendors.map(vendor => {
+      const match = matchingRecords.find(r => vendorNameMap[r.site] === vendor.name);
+      if (match && match.price > 0) {
+        return {
+          ...vendor,
+          price: match.price,
+          in_stock: match.inStock !== undefined ? match.inStock : vendor.in_stock,
+          shipping_fee: match.shipping_fee !== undefined ? match.shipping_fee : vendor.shipping_fee,
+          delivery_days: match.delivery_days || vendor.delivery_days,
+          url: match.url || vendor.url
+        };
+      }
+      return vendor;
+    });
+
+    return { ...component, vendors: updatedVendors };
+  });
 }

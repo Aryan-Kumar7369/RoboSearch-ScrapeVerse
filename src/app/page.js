@@ -7,7 +7,7 @@ import StatsOverview from '@/components/StatsOverview';
 import ProductCard from '@/components/ProductCard';
 import BomOptimizer from '@/components/BomOptimizer';
 import PipelineModal from '@/components/PipelineModal';
-import { calculateBOMOptimization } from '@/lib/bomCalculator';
+import { calculateBOMOptimization, mergeScrapedResults } from '@/lib/bomCalculator';
 import { RefreshCw, Search } from 'lucide-react';
 
 export default function Home() {
@@ -16,6 +16,7 @@ export default function Home() {
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [syncStatusText, setSyncStatusText] = useState('');
 
   const toggleSelect = (id) => {
     setSelectedIds(prev =>
@@ -25,28 +26,51 @@ export default function Home() {
 
   const handleSyncScrapers = async () => {
     setIsSyncing(true);
+    setSyncStatusText('Dispatching collector...');
     try {
       const res = await fetch('/api/scrape', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           queryList: [
-            { keyword: searchQuery || "ESP32 NodeMCU", site: "robu" },
-            { keyword: searchQuery || "ESP32 NodeMCU", site: "flyrobo" },
-            { keyword: searchQuery || "ESP32 NodeMCU", site: "electronicscomp" },
-            { keyword: searchQuery || "ESP32 NodeMCU", site: "amazon" }
+            { keyword: searchQuery || "ESP32", site: "robu" },
+            { keyword: searchQuery || "ESP32", site: "flyrobo" },
+            { keyword: searchQuery || "ESP32", site: "electronicscomp" },
+            { keyword: searchQuery || "ESP32", site: "amazon" }
           ]
         })
       });
       const data = await res.json();
-      if (data.success) {
+
+      if (data.responseId) {
         setIsTerminalOpen(true);
+        pollScraperResults(data.responseId);
       }
     } catch (err) {
-      console.error("Scraper execution failed:", err);
-    } finally {
+      console.error(err);
       setIsSyncing(false);
     }
+  };
+
+  const pollScraperResults = (responseId) => {
+    setSyncStatusText('Extracting live DOM prices...');
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/scrape/results?responseId=${responseId}`);
+        const result = await res.json();
+
+        if (result.status === "READY" && result.data.length > 0) {
+          clearInterval(interval);
+          setComponents(prev => mergeScrapedResults(prev, result.data));
+          setIsSyncing(false);
+          setSyncStatusText('Synced!');
+          setTimeout(() => setSyncStatusText(''), 3000);
+        }
+      } catch (e) {
+        clearInterval(interval);
+        setIsSyncing(false);
+      }
+    }, 3000);
   };
 
   const bomResult = calculateBOMOptimization(selectedIds, components);
@@ -56,12 +80,11 @@ export default function Home() {
       <Navbar onOpenTerminal={() => setIsTerminalOpen(true)} />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 flex-1 w-full">
-        {/* Search & Actions Bar */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div>
             <h2 className="text-2xl font-bold tracking-tight text-slate-100">Robotics Component Arbitrage</h2>
             <p className="text-sm text-slate-400 mt-0.5">
-              Two-stage Bright Data Scraper Studio pipelines running live across Indian distributors.
+              Live Scraper Studio 2-stage discovery & BOM cost optimizer.
             </p>
           </div>
 
@@ -82,12 +105,12 @@ export default function Home() {
               className="flex items-center gap-2 px-3.5 py-2 rounded-lg bg-cyan-950/60 border border-cyan-800/80 hover:bg-cyan-900/50 text-cyan-300 text-xs font-mono transition-all shadow-glow-cyan"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              {isSyncing ? 'Dispatching...' : 'Sync Live Data'}
+              {isSyncing ? (syncStatusText || 'Syncing...') : 'Sync Live Data'}
             </button>
           </div>
         </div>
 
-        <StatsOverview totalComponents={components.length} totalVendors={4} avgSavings={185} />
+        <StatsOverview totalComponents={components.length} totalVendors={4} avgSavings={bomResult?.savings || 185} />
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {components.map(item => (
